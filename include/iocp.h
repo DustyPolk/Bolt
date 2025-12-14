@@ -71,10 +71,12 @@ bool bolt_iocp_post_send(BoltIOCP* iocp, BoltConnection* conn,
 
 /*
  * Post a TransmitFile operation (zero-copy).
+ * If range_start and range_length are non-zero, only that range is sent.
  */
 bool bolt_iocp_post_transmit_file(BoltIOCP* iocp, BoltConnection* conn,
                                    HANDLE file, size_t file_size,
-                                   const char* headers, size_t header_len);
+                                   const char* headers, size_t header_len,
+                                   size_t range_start, size_t range_length);
 
 /*
  * Post disconnect for connection reuse.

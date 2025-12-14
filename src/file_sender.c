@@ -40,9 +40,11 @@ HANDLE bolt_open_file(const char* filepath, size_t* out_size) {
 
 /*
  * Send file using TransmitFile.
+ * Supports range requests for 206 Partial Content.
  */
 bool bolt_send_file(BoltConnection* conn, const char* filepath,
-                    const char* headers, size_t header_len) {
+                    const char* headers, size_t header_len,
+                    const HttpRange* range) {
     if (!conn || !filepath || !g_bolt_server) return false;
     
     size_t file_size = 0;
@@ -52,9 +54,26 @@ bool bolt_send_file(BoltConnection* conn, const char* filepath,
         return false;
     }
     
-    /* Store file handle in connection for cleanup */
-    conn->file_handle = file;
-    conn->file_size = file_size;
+    /* Determine range to send */
+    size_t range_start = 0;
+    size_t range_length = 0;
+    
+    if (range && range->valid) {
+        range_start = range->start;
+        range_length = (range->end >= range->start) ? (range->end - range->start + 1) : 0;
+        
+        /* Validate range */
+        if (range_start >= file_size || range_length == 0) {
+            CloseHandle(file);
+            return false;
+        }
+        if (range_start + range_length > file_size) {
+            range_length = file_size - range_start;
+        }
+    } else {
+        /* Send entire file */
+        range_length = file_size;
+    }
     
     /* Post TransmitFile operation */
     bool result = bolt_iocp_post_transmit_file(
@@ -63,7 +82,9 @@ bool bolt_send_file(BoltConnection* conn, const char* filepath,
         file,
         file_size,
         headers,
-        header_len
+        header_len,
+        range_start,
+        range_length
     );
     
     if (!result) {

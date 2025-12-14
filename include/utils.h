@@ -24,6 +24,12 @@ typedef struct {
 bool utils_sanitize_path(const char* uri, char* out_path, size_t out_size);
 
 /*
+ * Sanitize a URL path with a custom web root (for virtual hosts).
+ * Returns true if path is safe, false otherwise.
+ */
+bool utils_sanitize_path_with_root(const char* uri, const char* web_root, char* out_path, size_t out_size);
+
+/*
  * Get file information (exists, is_directory, size, mtime).
  */
 FileInfo utils_get_file_info(const char* path);

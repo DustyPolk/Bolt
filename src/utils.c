@@ -110,21 +110,30 @@ static bool normalize_path_components(char* path, size_t path_size) {
 }
 
 /*
- * Sanitize a URL path to prevent directory traversal attacks.
- * SECURITY: This function must prevent all path traversal attempts.
+ * Sanitize a URL path (uses default web root).
  */
 bool utils_sanitize_path(const char* uri, char* out_path, size_t out_size) {
+    return utils_sanitize_path_with_root(uri, NULL, out_path, out_size);
+}
+
+/*
+ * Sanitize a URL path with a custom web root (for virtual hosts).
+ */
+bool utils_sanitize_path_with_root(const char* uri, const char* web_root, char* out_path, size_t out_size) {
     if (!uri || !out_path || out_size < 2) {
         return false;
     }
     
+    /* Use provided web root or default */
+    const char* root = web_root && web_root[0] ? web_root : BOLT_WEB_ROOT;
+    
     /* Start with web root - use safe copy */
-    size_t root_len = strlen(BOLT_WEB_ROOT);
+    size_t root_len = strlen(root);
     if (root_len >= out_size) {
         return false;
     }
     
-    strncpy(out_path, BOLT_WEB_ROOT, out_size - 1);
+    strncpy(out_path, root, out_size - 1);
     out_path[out_size - 1] = '\0';
     size_t current_len = root_len;
     

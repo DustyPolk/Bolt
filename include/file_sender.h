@@ -22,9 +22,11 @@ typedef struct {
  * Send a file using TransmitFile (zero-copy).
  * Returns true if transmission started, false on error.
  * The file is sent asynchronously - completion handled via IOCP.
+ * If range is valid, only that range is sent (206 Partial Content).
  */
 bool bolt_send_file(BoltConnection* conn, const char* filepath,
-                    const char* headers, size_t header_len);
+                    const char* headers, size_t header_len,
+                    const HttpRange* range);
 
 /*
  * Send headers and body using regular send.

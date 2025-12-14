@@ -6,11 +6,17 @@
 #include "../include/http.h"
 #include "../include/file_sender.h"
 #include "../include/file_cache.h"
+#include "../include/compression.h"
+#include "../include/metrics.h"
+#include "../include/vhost.h"
+#include "../include/rewrite.h"
+#include "../include/profiler.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 #include <time.h>
+#include <ws2tcpip.h>
 
 /*
  * Check if a cached response is still valid.
@@ -292,9 +298,19 @@ void file_server_handle(SOCKET client, const HttpRequest* request) {
         return;
     }
     
-    /* Only allow GET and HEAD */
+    /* Handle OPTIONS (CORS preflight) */
+    if (request->method == HTTP_OPTIONS) {
+        http_send_headers(client, HTTP_200_OK, NULL, 0,
+                         "Allow: GET, HEAD, OPTIONS\r\n"
+                         "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n"
+                         "Access-Control-Allow-Headers: Content-Type\r\n");
+        return;
+    }
+    
+    /* Only allow GET and HEAD for file serving */
     if (request->method != HTTP_GET && request->method != HTTP_HEAD) {
-        http_send_error(client, HTTP_405_METHOD_NOT_ALLOWED);
+        http_send_headers(client, HTTP_405_METHOD_NOT_ALLOWED, NULL, 0,
+                         "Allow: GET, HEAD, OPTIONS\r\n");
         return;
     }
     
@@ -336,6 +352,46 @@ void file_server_handle(SOCKET client, const HttpRequest* request) {
  * ========================= */
 
 /*
+ * Extract a header value from the request buffer.
+ */
+static void extract_header_from_buffer(const char* request, const char* header_name,
+                                       char* out_value, size_t out_size) {
+    out_value[0] = '\0';
+    
+    /* Find the header */
+    const char* header_start = strstr(request, header_name);
+    if (!header_start) {
+        return;
+    }
+    
+    /* Skip header name and colon */
+    const char* value_start = header_start + strlen(header_name);
+    if (*value_start == ':') {
+        value_start++;
+    }
+    
+    /* Skip whitespace */
+    while (*value_start == ' ' || *value_start == '\t') {
+        value_start++;
+    }
+    
+    /* Find end of line */
+    const char* value_end = value_start;
+    while (*value_end && *value_end != '\r' && *value_end != '\n') {
+        value_end++;
+    }
+    
+    /* Copy value */
+    size_t value_len = value_end - value_start;
+    if (value_len >= out_size) {
+        value_len = out_size - 1;
+    }
+    
+    strncpy(out_value, value_start, value_len);
+    out_value[value_len] = '\0';
+}
+
+/*
  * Sanitize header value to prevent header injection.
  */
 static size_t sanitize_header_value(const char* value, char* out, size_t out_size) {
@@ -354,12 +410,14 @@ static size_t sanitize_header_value(const char* value, char* out, size_t out_siz
     return len;
 }
 
-static size_t build_headers_200(char* out, size_t out_sz,
+static size_t build_headers_206(char* out, size_t out_sz,
                                 const char* content_type,
-                                size_t content_length,
+                                size_t range_start,
+                                size_t range_end,
+                                size_t file_size,
                                 const char* extra_headers,
                                 bool keep_alive) {
-    /* Sanitize header values to prevent injection */
+    /* Sanitize header values */
     char safe_ct[256] = "application/octet-stream";
     char safe_extra[512] = "";
     
@@ -370,12 +428,70 @@ static size_t build_headers_200(char* out, size_t out_sz,
         sanitize_header_value(extra_headers, safe_extra, sizeof(safe_extra));
     }
     
-    return (size_t)snprintf(out, out_sz,
-        "HTTP/1.1 200 OK\r\n"
+    size_t range_length = range_end - range_start + 1;
+    
+    int offset = snprintf(out, out_sz,
+        "HTTP/1.1 206 Partial Content\r\n"
         "Server: " BOLT_SERVER_NAME "\r\n"
         "Connection: %s\r\n"
         "Keep-Alive: timeout=60, max=1000\r\n"
         "Content-Type: %s\r\n"
+        "Content-Range: bytes %zu-%zu/%zu\r\n"
+        "Content-Length: %zu\r\n",
+        keep_alive ? "keep-alive" : "close",
+        safe_ct,
+        range_start, range_end, file_size,
+        range_length);
+    
+    offset += snprintf(out + offset, out_sz - offset,
+        "%s"
+        "X-Frame-Options: DENY\r\n"
+        "X-Content-Type-Options: nosniff\r\n"
+        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:\r\n"
+        "Referrer-Policy: strict-origin-when-cross-origin\r\n"
+        "Permissions-Policy: geolocation=(), microphone=(), camera=()\r\n"
+        "\r\n",
+        safe_extra);
+    
+    return (size_t)offset;
+}
+
+static size_t build_headers_200(char* out, size_t out_sz,
+                                const char* content_type,
+                                size_t content_length,
+                                const char* extra_headers,
+                                bool keep_alive,
+                                const char* content_encoding) {
+    /* Sanitize header values to prevent injection */
+    char safe_ct[256] = "application/octet-stream";
+    char safe_extra[512] = "";
+    char safe_encoding[64] = "";
+    
+    if (content_type) {
+        sanitize_header_value(content_type, safe_ct, sizeof(safe_ct));
+    }
+    if (extra_headers && *extra_headers) {
+        sanitize_header_value(extra_headers, safe_extra, sizeof(safe_extra));
+    }
+    if (content_encoding && *content_encoding) {
+        sanitize_header_value(content_encoding, safe_encoding, sizeof(safe_encoding));
+    }
+    
+    int offset = snprintf(out, out_sz,
+        "HTTP/1.1 200 OK\r\n"
+        "Server: " BOLT_SERVER_NAME "\r\n"
+        "Connection: %s\r\n"
+        "Keep-Alive: timeout=60, max=1000\r\n"
+        "Content-Type: %s\r\n",
+        keep_alive ? "keep-alive" : "close",
+        safe_ct);
+    
+    if (safe_encoding[0]) {
+        offset += snprintf(out + offset, out_sz - offset,
+            "Content-Encoding: %s\r\n", safe_encoding);
+    }
+    
+    offset += snprintf(out + offset, out_sz - offset,
         "Content-Length: %zu\r\n"
         "%s"
         "X-Frame-Options: DENY\r\n"
@@ -384,11 +500,10 @@ static size_t build_headers_200(char* out, size_t out_sz,
         "Referrer-Policy: strict-origin-when-cross-origin\r\n"
         "Permissions-Policy: geolocation=(), microphone=(), camera=()\r\n"
         "\r\n",
-        keep_alive ? "keep-alive" : "close",
-        safe_ct,
         content_length,
-        safe_extra
-    );
+        safe_extra);
+    
+    return (size_t)offset;
 }
 
 static size_t build_headers_status(char* out, size_t out_sz,
@@ -447,14 +562,127 @@ void bolt_file_server_handle(BoltConnection* conn, const HttpRequest* request) {
         if (conn) send_error_async(conn, HTTP_400_BAD_REQUEST);
         return;
     }
+    
+    /* Start profiling */
+    profiler_start_request(conn);
 
-    if (request->method != HTTP_GET && request->method != HTTP_HEAD) {
-        send_error_async(conn, HTTP_405_METHOD_NOT_ALLOWED);
+    /* Handle metrics endpoint */
+    if (metrics_is_endpoint(request->uri)) {
+        char metrics_json[2048];
+        size_t json_len = 0;
+        if (metrics_generate_json(g_bolt_server, metrics_json, sizeof(metrics_json), &json_len)) {
+            char headers[512];
+            size_t hdr_len = snprintf(headers, sizeof(headers),
+                "HTTP/1.1 200 OK\r\n"
+                "Server: " BOLT_SERVER_NAME "\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: %zu\r\n"
+                "Cache-Control: no-cache\r\n"
+                "\r\n",
+                json_len);
+            if (bolt_send_response(conn, headers, hdr_len, metrics_json, json_len)) {
+                return;
+            }
+        }
+        send_error_async(conn, HTTP_500_INTERNAL_ERROR);
         return;
     }
 
+    /* Handle OPTIONS (CORS preflight) */
+    if (request->method == HTTP_OPTIONS) {
+        char headers[512];
+        size_t hdr_len = snprintf(headers, sizeof(headers),
+            "HTTP/1.1 200 OK\r\n"
+            "Server: " BOLT_SERVER_NAME "\r\n"
+            "Allow: GET, HEAD, OPTIONS\r\n"
+            "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n");
+        if (!bolt_send_headers_only(conn, headers, hdr_len)) {
+            bolt_conn_close(conn);
+            bolt_conn_release(g_bolt_server->conn_pool, conn);
+        }
+        return;
+    }
+    
+    /* Handle POST - for static file server, POST is not supported */
+    if (request->method == HTTP_POST) {
+        send_error_async(conn, HTTP_405_METHOD_NOT_ALLOWED);
+        return;
+    }
+    
+    if (request->method != HTTP_GET && request->method != HTTP_HEAD) {
+        /* Send 405 with Allow header */
+        char headers[512];
+        size_t hdr_len = snprintf(headers, sizeof(headers),
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Server: " BOLT_SERVER_NAME "\r\n"
+            "Allow: GET, HEAD, OPTIONS\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n");
+        if (!bolt_send_headers_only(conn, headers, hdr_len)) {
+            bolt_conn_close(conn);
+            bolt_conn_release(g_bolt_server->conn_pool, conn);
+        }
+        return;
+    }
+
+    /* Apply rewrite rules */
+    char rewritten_uri[2048];
+    bool was_rewritten = false;
+    if (g_bolt_server && g_bolt_server->rewrite_engine) {
+        was_rewritten = rewrite_apply(g_bolt_server->rewrite_engine, request->uri,
+                                      rewritten_uri, sizeof(rewritten_uri));
+    }
+    
+    const char* uri_to_use = was_rewritten ? rewritten_uri : request->uri;
+    
+    /* Check for redirect */
+    if (was_rewritten && g_bolt_server && g_bolt_server->rewrite_engine) {
+        BoltRewriteRule* rule = g_bolt_server->rewrite_engine->rules;
+        while (rule) {
+            if (rewrite_match_pattern(rule->pattern, request->uri)) {
+                if (rule->type == REWRITE_REDIRECT_301 || rule->type == REWRITE_REDIRECT_302) {
+                    int status = (rule->type == REWRITE_REDIRECT_301) ? 301 : 302;
+                    char headers[512];
+                    size_t hdr_len = snprintf(headers, sizeof(headers),
+                        "HTTP/1.1 %d %s\r\n"
+                        "Server: " BOLT_SERVER_NAME "\r\n"
+                        "Location: %s\r\n"
+                        "Content-Length: 0\r\n"
+                        "\r\n",
+                        status, status == 301 ? "Moved Permanently" : "Found",
+                        rewritten_uri);
+                    if (bolt_send_headers_only(conn, headers, hdr_len)) {
+                        return;
+                    }
+                }
+                break;
+            }
+            rule = rule->next;
+        }
+    }
+    
+    /* Determine virtual host */
+    BoltVHost* vhost = NULL;
+    if (g_bolt_server && g_bolt_server->vhost_manager) {
+        char host_header[256];
+        extract_header_from_buffer(conn->recv_buffer, "Host", host_header, sizeof(host_header));
+        vhost = vhost_find(g_bolt_server->vhost_manager, host_header);
+        if (!vhost) {
+            vhost = vhost_get_default(g_bolt_server->vhost_manager);
+        }
+    }
+    
+    /* Determine web root */
+    const char* web_root = g_bolt_server ? g_bolt_server->web_root : BOLT_WEB_ROOT;
+    if (vhost && vhost->root[0]) {
+        web_root = vhost->root;
+    }
+    
     char filepath[BOLT_MAX_PATH_LENGTH];
-    if (!utils_sanitize_path(request->uri, filepath, sizeof(filepath))) {
+    if (!utils_sanitize_path_with_root(uri_to_use, web_root, filepath, sizeof(filepath))) {
         send_error_async(conn, HTTP_403_FORBIDDEN);
         return;
     }
@@ -522,16 +750,126 @@ void bolt_file_server_handle(BoltConnection* conn, const HttpRequest* request) {
     }
 #endif
 
+    /* Check if compression should be applied */
+    BoltCompressionConfig comp_config = compression_get_default_config();
+    BoltCompressionType comp_type = BOLT_COMPRESS_NONE;
+    const char* content_encoding = NULL;
+    bool should_compress = false;
+    
+    if (compression_should_compress(content_type, &comp_config) &&
+        info.size >= comp_config.min_size) {
+        comp_type = compression_parse_accept_encoding(request->accept_encoding, &comp_config);
+        if (comp_type == BOLT_COMPRESS_GZIP) {
+            content_encoding = "gzip";
+            should_compress = true;
+        }
+    }
+    
+    /* For small files that fit in send buffer, compress in memory */
+    if (should_compress && info.size <= BOLT_SEND_BUFFER_SIZE / 2) {
+        /* Read file into memory */
+        HANDLE file = CreateFileA(filepath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file != INVALID_HANDLE_VALUE) {
+            char* file_data = (char*)malloc(info.size);
+            if (file_data) {
+                DWORD bytes_read = 0;
+                if (ReadFile(file, file_data, (DWORD)info.size, &bytes_read, NULL) &&
+                    bytes_read == info.size) {
+                    /* Compress */
+                    BoltCompressedData compressed;
+                    if (compression_gzip(file_data, info.size, &compressed, comp_config.level)) {
+                        /* Build headers with compression */
+                        char cache_headers[256];
+                        build_cache_headers(&info, cache_headers, sizeof(cache_headers));
+                        
+                        char headers[1024];
+                        size_t hdr_len = build_headers_200(headers, sizeof(headers),
+                                                           content_type,
+                                                           compressed.size,
+                                                           cache_headers,
+                                                           conn->keep_alive,
+                                                           content_encoding);
+                        
+                        if (request->method == HTTP_HEAD) {
+                            free(compressed.data);
+                            free(file_data);
+                            CloseHandle(file);
+                            if (!bolt_send_headers_only(conn, headers, hdr_len)) {
+                                bolt_conn_close(conn);
+                                bolt_conn_release(g_bolt_server->conn_pool, conn);
+                            }
+                            return;
+                        }
+                        
+                        /* Send compressed data */
+                        if (bolt_send_response(conn, headers, hdr_len,
+                                               compressed.data, compressed.size)) {
+                            free(compressed.data);
+                            free(file_data);
+                            CloseHandle(file);
+                            return;
+                        }
+                        free(compressed.data);
+                    }
+                }
+                free(file_data);
+            }
+            CloseHandle(file);
+        }
+        /* Fall through to uncompressed send if compression failed */
+    }
+    
+    /* Parse Range header if present */
+    char range_header[128];
+    extract_header_from_buffer(conn->recv_buffer, "Range", range_header, sizeof(range_header));
+    HttpRange range = { 0, SIZE_MAX, false };
+    
+    if (range_header[0] != '\0') {
+        range = http_parse_range(range_header, info.size);
+        if (!range.valid) {
+            /* Invalid range - send 416 Range Not Satisfiable */
+            char headers[512];
+            size_t hdr_len = snprintf(headers, sizeof(headers),
+                "HTTP/1.1 416 Range Not Satisfiable\r\n"
+                "Server: " BOLT_SERVER_NAME "\r\n"
+                "Content-Range: bytes */%zu\r\n"
+                "Content-Length: 0\r\n"
+                "\r\n",
+                info.size);
+            if (!bolt_send_headers_only(conn, headers, hdr_len)) {
+                bolt_conn_close(conn);
+                bolt_conn_release(g_bolt_server->conn_pool, conn);
+            }
+            return;
+        }
+    }
+    
     /* Build cache headers (generated per request for non-cached path) */
     char cache_headers[256];
     build_cache_headers(&info, cache_headers, sizeof(cache_headers));
 
     char headers[1024];
-    size_t hdr_len = build_headers_200(headers, sizeof(headers),
-                                       content_type,
-                                       info.size,
-                                       cache_headers,
-                                       conn->keep_alive);
+    size_t hdr_len;
+    
+    if (range.valid) {
+        /* Range request - build 206 Partial Content headers */
+        hdr_len = build_headers_206(headers, sizeof(headers),
+                                    content_type,
+                                    range.start,
+                                    range.end,
+                                    info.size,
+                                    cache_headers,
+                                    conn->keep_alive);
+    } else {
+        /* Full file request */
+        hdr_len = build_headers_200(headers, sizeof(headers),
+                                    content_type,
+                                    info.size,
+                                    cache_headers,
+                                    conn->keep_alive,
+                                    NULL);
+    }
 
     if (request->method == HTTP_HEAD) {
         if (!bolt_send_headers_only(conn, headers, hdr_len)) {
@@ -541,8 +879,8 @@ void bolt_file_server_handle(BoltConnection* conn, const HttpRequest* request) {
         return;
     }
 
-    /* Zero-copy file send */
-    if (!bolt_send_file(conn, filepath, headers, hdr_len)) {
+    /* Zero-copy file send (with range support) */
+    if (!bolt_send_file(conn, filepath, headers, hdr_len, range.valid ? &range : NULL)) {
         send_error_async(conn, HTTP_500_INTERNAL_ERROR);
         return;
     }

@@ -11,6 +11,7 @@
 const char* http_status_text(HttpStatus status) {
     switch (status) {
         case HTTP_200_OK:               return "OK";
+        case HTTP_206_PARTIAL_CONTENT:  return "Partial Content";
         case HTTP_304_NOT_MODIFIED:     return "Not Modified";
         case HTTP_400_BAD_REQUEST:      return "Bad Request";
         case HTTP_403_FORBIDDEN:        return "Forbidden";
@@ -19,6 +20,7 @@ const char* http_status_text(HttpStatus status) {
         case HTTP_408_REQUEST_TIMEOUT:   return "Request Timeout";
         case HTTP_413_PAYLOAD_TOO_LARGE: return "Payload Too Large";
         case HTTP_414_URI_TOO_LONG:     return "URI Too Long";
+        case HTTP_416_RANGE_NOT_SATISFIABLE: return "Range Not Satisfiable";
         case HTTP_500_INTERNAL_ERROR:   return "Internal Server Error";
         default:                        return "Unknown";
     }
@@ -33,6 +35,12 @@ static HttpMethod parse_method(const char* str, size_t len) {
     }
     if (len == 4 && strncmp(str, "HEAD", 4) == 0) {
         return HTTP_HEAD;
+    }
+    if (len == 4 && strncmp(str, "POST", 4) == 0) {
+        return HTTP_POST;
+    }
+    if (len == 7 && strncmp(str, "OPTIONS", 7) == 0) {
+        return HTTP_OPTIONS;
     }
     return HTTP_UNKNOWN;
 }
@@ -106,7 +114,7 @@ static void extract_header(const char* request, const char* header_name,
  * Parse an HTTP request.
  */
 HttpRequest http_parse_request(const char* raw_request, size_t length) {
-    HttpRequest req = { HTTP_UNKNOWN, "", "", "", false };
+    HttpRequest req = { HTTP_UNKNOWN, "", "", "", "", { 0, SIZE_MAX, false }, false };
     
     if (!raw_request || length == 0) {
         return req;
@@ -185,6 +193,20 @@ HttpRequest http_parse_request(const char* raw_request, size_t length) {
                    req.if_none_match, sizeof(req.if_none_match));
     extract_header(raw_request, "If-Modified-Since",
                    req.if_modified_since, sizeof(req.if_modified_since));
+    
+    /* Extract Accept-Encoding for compression */
+    extract_header(raw_request, "Accept-Encoding",
+                   req.accept_encoding, sizeof(req.accept_encoding));
+    
+    /* Extract Range header (will be parsed later when file size is known) */
+    char range_header[128];
+    extract_header(raw_request, "Range", range_header, sizeof(range_header));
+    
+    /* Store range header string for later parsing (we need file size first) */
+    /* For now, initialize range as invalid - will be parsed in file_server */
+    req.range.valid = false;
+    req.range.start = 0;
+    req.range.end = SIZE_MAX;
     
     req.valid = true;
     return req;
@@ -274,5 +296,70 @@ void http_send_response(SOCKET client, HttpStatus status, const char* content_ty
     if (body && body_length > 0) {
         send(client, body, (int)body_length, 0);
     }
+}
+
+/*
+ * Parse Range header from request.
+ * Supports formats: "bytes=start-end", "bytes=start-", "bytes=-suffix"
+ */
+HttpRange http_parse_range(const char* range_header, size_t file_size) {
+    HttpRange range = { 0, 0, false };
+    
+    if (!range_header || file_size == 0) {
+        return range;
+    }
+    
+    /* Find "bytes=" prefix */
+    const char* bytes_prefix = strstr(range_header, "bytes=");
+    if (!bytes_prefix) {
+        return range;
+    }
+    
+    const char* range_spec = bytes_prefix + 6; /* Skip "bytes=" */
+    
+    /* Skip whitespace */
+    while (*range_spec == ' ' || *range_spec == '\t') {
+        range_spec++;
+    }
+    
+    /* Parse range specification */
+    if (*range_spec == '-') {
+        /* Suffix length: "bytes=-suffix" */
+        range_spec++;
+        unsigned long long suffix = strtoull(range_spec, NULL, 10);
+        if (suffix > 0 && suffix <= file_size) {
+            range.start = file_size - (size_t)suffix;
+            range.end = file_size - 1;
+            range.valid = true;
+        }
+    } else {
+        /* Start position: "bytes=start-end" or "bytes=start-" */
+        unsigned long long start = strtoull(range_spec, NULL, 10);
+        if (start >= file_size) {
+            return range; /* Invalid - start beyond file */
+        }
+        
+        range.start = (size_t)start;
+        
+        /* Find end position */
+        const char* dash = strchr(range_spec, '-');
+        if (dash && dash[1] != '\0' && dash[1] != '\r' && dash[1] != '\n') {
+            /* Explicit end: "bytes=start-end" */
+            unsigned long long end = strtoull(dash + 1, NULL, 10);
+            if (end >= file_size) {
+                end = file_size - 1;
+            }
+            range.end = (size_t)end;
+        } else {
+            /* No end specified: "bytes=start-" means to end of file */
+            range.end = file_size - 1;
+        }
+        
+        if (range.end >= range.start) {
+            range.valid = true;
+        }
+    }
+    
+    return range;
 }
 

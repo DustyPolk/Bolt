@@ -308,15 +308,36 @@ bool bolt_iocp_post_send(BoltIOCP* iocp, BoltConnection* conn,
 
 /*
  * Post TransmitFile (zero-copy).
+ * Supports range requests via range_start and range_length.
  */
 bool bolt_iocp_post_transmit_file(BoltIOCP* iocp, BoltConnection* conn,
                                    HANDLE file, size_t file_size,
-                                   const char* headers, size_t header_len) {
+                                   const char* headers, size_t header_len,
+                                   size_t range_start, size_t range_length) {
     if (!conn || file == INVALID_HANDLE_VALUE) return false;
     
     conn->file_handle = file;
     conn->file_size = file_size;
-    conn->file_offset = 0;
+    
+    /* Determine actual range to send */
+    size_t actual_start = 0;
+    size_t actual_length = file_size;
+    
+    if (range_length > 0) {
+        /* Range request */
+        actual_start = range_start;
+        actual_length = range_length;
+        
+        /* Validate range */
+        if (actual_start >= file_size) {
+            return false;  /* Invalid range */
+        }
+        if (actual_start + actual_length > file_size) {
+            actual_length = file_size - actual_start;  /* Clamp to file end */
+        }
+    }
+    
+    conn->file_offset = actual_start;
     
     BoltOverlapped* overlap = &conn->send_overlapped;
     memset(&overlap->overlapped, 0, sizeof(OVERLAPPED));
@@ -338,11 +359,12 @@ bool bolt_iocp_post_transmit_file(BoltIOCP* iocp, BoltConnection* conn,
         flags |= TF_REUSE_SOCKET;
     }
     
+    /* TransmitFile with range support */
     BOOL result = iocp->TransmitFile(
         conn->socket,
         file,
-        (DWORD)file_size,
-        0,  /* Use default send size */
+        (DWORD)actual_length,  /* Number of bytes to transmit */
+        (DWORD)actual_start,    /* Offset from start of file */
         &overlap->overlapped,
         headers ? &tfb : NULL,
         flags

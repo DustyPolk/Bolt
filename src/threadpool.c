@@ -3,6 +3,7 @@
 #include "../include/iocp.h"
 #include "../include/connection.h"
 #include "../include/file_server.h"
+#include "../include/profiler.h"
 #include "../include/bolt_server.h"  /* For rate limiter functions */
 #include <stdio.h>
 #include <stdlib.h>
@@ -304,6 +305,9 @@ static DWORD WINAPI worker_thread(LPVOID param) {
                             bolt_conn_handle_request(conn);
                             InterlockedIncrement64(&worker->requests_handled);
                             InterlockedIncrement64(&pool->total_requests);
+                            
+                            /* Log access (will be logged after response is sent) */
+                            /* Note: Actual logging happens in send completion */
                         } else {
                             /* Invalid request or timeout - send error and close */
                             send_error_async(conn, HTTP_408_REQUEST_TIMEOUT);
@@ -342,6 +346,11 @@ static DWORD WINAPI worker_thread(LPVOID param) {
                         bolt_conn_release(g_bolt_server->conn_pool, conn);
                     }
                 } else {
+                    /* End profiling */
+                    if (g_bolt_server && g_bolt_server->logger) {
+                        profiler_end_request(conn, g_bolt_server->logger);
+                    }
+                    
                     /* Send complete */
                     if (conn->keep_alive && conn->requests_served < BOLT_MAX_KEEPALIVE_REQUESTS) {
                         /* Reset for next request */
@@ -362,10 +371,67 @@ static DWORD WINAPI worker_thread(LPVOID param) {
                 worker->bytes_sent += bytes_transferred;
                 conn->bytes_sent += bytes_transferred;
                 
+                /* Log access entry */
+                if (g_bolt_server->logger && conn->request.valid) {
+                    char ip_str[64];
+                    struct in_addr addr;
+                    addr.s_addr = conn->client_ip;
+                    inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+                    
+                    const char* method_str = "UNKNOWN";
+                    switch (conn->request.method) {
+                        case HTTP_GET: method_str = "GET"; break;
+                        case HTTP_HEAD: method_str = "HEAD"; break;
+                        case HTTP_POST: method_str = "POST"; break;
+                        case HTTP_OPTIONS: method_str = "OPTIONS"; break;
+                        default: break;
+                    }
+                    
+                    /* Extract Referer and User-Agent from request */
+                    char referer[256] = "";
+                    char user_agent[512] = "";
+                    const char* req_buf = conn->recv_buffer;
+                    
+                    char* ref_start = strstr(req_buf, "Referer:");
+                    if (ref_start) {
+                        const char* ref_val = ref_start + 8;
+                        while (*ref_val == ' ' || *ref_val == '\t') ref_val++;
+                        const char* ref_end = ref_val;
+                        while (*ref_end && *ref_end != '\r' && *ref_end != '\n') ref_end++;
+                        size_t ref_len = ref_end - ref_val;
+                        if (ref_len >= sizeof(referer)) ref_len = sizeof(referer) - 1;
+                        strncpy(referer, ref_val, ref_len);
+                        referer[ref_len] = '\0';
+                    }
+                    
+                    char* ua_start = strstr(req_buf, "User-Agent:");
+                    if (ua_start) {
+                        const char* ua_val = ua_start + 11;
+                        while (*ua_val == ' ' || *ua_val == '\t') ua_val++;
+                        const char* ua_end = ua_val;
+                        while (*ua_end && *ua_end != '\r' && *ua_end != '\n') ua_end++;
+                        size_t ua_len = ua_end - ua_val;
+                        if (ua_len >= sizeof(user_agent)) ua_len = sizeof(user_agent) - 1;
+                        strncpy(user_agent, ua_val, ua_len);
+                        user_agent[ua_len] = '\0';
+                    }
+                    
+                    int status = 200;  /* TODO: Track actual status code */
+                    logger_access(g_bolt_server->logger, ip_str, method_str,
+                                 conn->request.uri, status, bytes_transferred,
+                                 referer[0] ? referer : NULL,
+                                 user_agent[0] ? user_agent : NULL);
+                }
+                
                 /* Close file handle */
                 if (conn->file_handle != INVALID_HANDLE_VALUE) {
                     CloseHandle(conn->file_handle);
                     conn->file_handle = INVALID_HANDLE_VALUE;
+                }
+                
+                /* End profiling */
+                if (g_bolt_server && g_bolt_server->logger) {
+                    profiler_end_request(conn, g_bolt_server->logger);
                 }
                 
                 /* Handle keep-alive or close */

@@ -7,6 +7,11 @@
 #include "connection.h"
 #include "memory_pool.h"
 #include "file_cache.h"
+#include "config.h"
+#include "logger.h"
+#include "vhost.h"
+#include "rewrite.h"
+#include "proxy.h"
 
 /* Rate limiter entry */
 typedef struct RateLimitEntry {
@@ -37,6 +42,10 @@ struct BoltServer {
     BoltMemoryPool* mem_pool;
     BoltFileCache* file_cache;
     BoltRateLimiter* rate_limiter;
+    BoltLogger* logger;
+    BoltVHostManager* vhost_manager;
+    BoltRewriteEngine* rewrite_engine;
+    BoltProxyConfig* proxy_config;
     
     /* State */
     volatile bool running;
@@ -50,9 +59,14 @@ struct BoltServer {
 };
 
 /*
- * Create and initialize Bolt server.
+ * Create and initialize Bolt server (backward compatibility).
  */
 BoltServer* bolt_server_create(int port);
+
+/*
+ * Create and initialize Bolt server with configuration.
+ */
+BoltServer* bolt_server_create_with_config(const BoltConfig* config);
 
 /*
  * Run the server (blocks until shutdown).
