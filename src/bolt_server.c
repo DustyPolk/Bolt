@@ -1,6 +1,143 @@
 #include "../include/bolt_server.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+/* Forward declarations - made non-static for use in threadpool */
+BoltRateLimiter* bolt_rate_limiter_create(void);
+void bolt_rate_limiter_destroy(BoltRateLimiter* limiter);
+bool bolt_rate_limiter_check(BoltRateLimiter* limiter, uint32_t ip);
+void bolt_rate_limiter_increment(BoltRateLimiter* limiter, uint32_t ip);
+void bolt_rate_limiter_decrement(BoltRateLimiter* limiter, uint32_t ip);
+
+/* Simple hash function for IP addresses */
+static uint32_t hash_ip(uint32_t ip) {
+    return ip % BOLT_RATE_LIMIT_TABLE_SIZE;
+}
+
+/* Create rate limiter */
+BoltRateLimiter* bolt_rate_limiter_create(void) {
+    BoltRateLimiter* limiter = (BoltRateLimiter*)calloc(1, sizeof(BoltRateLimiter));
+    if (!limiter) return NULL;
+    InitializeCriticalSection(&limiter->lock);
+    return limiter;
+}
+
+/* Destroy rate limiter */
+void bolt_rate_limiter_destroy(BoltRateLimiter* limiter) {
+    if (!limiter) return;
+    
+    EnterCriticalSection(&limiter->lock);
+    for (int i = 0; i < BOLT_RATE_LIMIT_TABLE_SIZE; i++) {
+        RateLimitEntry* entry = limiter->table[i];
+        while (entry) {
+            RateLimitEntry* next = entry->next;
+            free(entry);
+            entry = next;
+        }
+    }
+    LeaveCriticalSection(&limiter->lock);
+    DeleteCriticalSection(&limiter->lock);
+    free(limiter);
+}
+
+/* Check if IP can make another connection */
+bool bolt_rate_limiter_check(BoltRateLimiter* limiter, uint32_t ip) {
+    if (!limiter) return true;  /* No limiter = allow all */
+    
+    EnterCriticalSection(&limiter->lock);
+    
+    uint32_t idx = hash_ip(ip);
+    RateLimitEntry* entry = limiter->table[idx];
+    
+    /* Find existing entry */
+    while (entry && entry->ip != ip) {
+        entry = entry->next;
+    }
+    
+    bool allowed = true;
+    if (entry) {
+        /* Check limit */
+        if (entry->connection_count >= BOLT_MAX_CONNECTIONS_PER_IP) {
+            allowed = false;
+        }
+    }
+    
+    LeaveCriticalSection(&limiter->lock);
+    return allowed;
+}
+
+/* Increment connection count for IP */
+void bolt_rate_limiter_increment(BoltRateLimiter* limiter, uint32_t ip) {
+    if (!limiter) return;
+    
+    EnterCriticalSection(&limiter->lock);
+    
+    uint32_t idx = hash_ip(ip);
+    RateLimitEntry* entry = limiter->table[idx];
+    
+    /* Find existing entry */
+    while (entry && entry->ip != ip) {
+        entry = entry->next;
+    }
+    
+    if (!entry) {
+        /* Create new entry */
+        entry = (RateLimitEntry*)calloc(1, sizeof(RateLimitEntry));
+        if (entry) {
+            entry->ip = ip;
+            entry->connection_count = 0;
+            entry->next = limiter->table[idx];
+            limiter->table[idx] = entry;
+        }
+    }
+    
+    if (entry) {
+        InterlockedIncrement(&entry->connection_count);
+        entry->last_seen = GetTickCount64();
+    }
+    
+    LeaveCriticalSection(&limiter->lock);
+}
+
+/* Decrement connection count for IP */
+void bolt_rate_limiter_decrement(BoltRateLimiter* limiter, uint32_t ip) {
+    if (!limiter) return;
+    
+    EnterCriticalSection(&limiter->lock);
+    
+    uint32_t idx = hash_ip(ip);
+    RateLimitEntry* entry = limiter->table[idx];
+    
+    /* Find existing entry */
+    while (entry && entry->ip != ip) {
+        entry = entry->next;
+    }
+    
+    if (entry) {
+        LONG count = InterlockedDecrement(&entry->connection_count);
+        entry->last_seen = GetTickCount64();
+        
+        /* Remove entry if count reaches zero (optional cleanup) */
+        if (count <= 0 && entry->connection_count <= 0) {
+            /* Remove from chain */
+            if (limiter->table[idx] == entry) {
+                limiter->table[idx] = entry->next;
+            } else {
+                RateLimitEntry* prev = limiter->table[idx];
+                while (prev && prev->next != entry) {
+                    prev = prev->next;
+                }
+                if (prev) {
+                    prev->next = entry->next;
+                }
+            }
+            free(entry);
+        }
+    }
+    
+    LeaveCriticalSection(&limiter->lock);
+}
 
 /*
  * Create Bolt server.
@@ -55,6 +192,17 @@ BoltServer* bolt_server_create(int port) {
 #if BOLT_ENABLE_FILE_CACHE
     server->file_cache = bolt_file_cache_create(BOLT_FILE_CACHE_CAPACITY, BOLT_FILE_CACHE_MAX_TOTAL_BYTES);
 #endif
+
+    /* Create rate limiter */
+    server->rate_limiter = bolt_rate_limiter_create();
+    if (!server->rate_limiter) {
+        BOLT_ERROR("Failed to create rate limiter");
+        if (server->file_cache) bolt_file_cache_destroy(server->file_cache);
+        bolt_conn_pool_destroy(server->conn_pool);
+        bolt_pool_destroy(server->mem_pool);
+        free(server);
+        return NULL;
+    }
 
     /* Create IOCP */
     printf("  [3/4] Initializing IOCP on port %d...\n", port);
@@ -162,6 +310,10 @@ void bolt_server_destroy(BoltServer* server) {
     if (server->file_cache) {
         bolt_file_cache_destroy(server->file_cache);
         server->file_cache = NULL;
+    }
+    
+    if (server->rate_limiter) {
+        bolt_rate_limiter_destroy(server->rate_limiter);
     }
     
     g_bolt_server = NULL;

@@ -16,6 +16,7 @@ const char* http_status_text(HttpStatus status) {
         case HTTP_403_FORBIDDEN:        return "Forbidden";
         case HTTP_404_NOT_FOUND:        return "Not Found";
         case HTTP_405_METHOD_NOT_ALLOWED: return "Method Not Allowed";
+        case HTTP_408_REQUEST_TIMEOUT:   return "Request Timeout";
         case HTTP_413_PAYLOAD_TOO_LARGE: return "Payload Too Large";
         case HTTP_414_URI_TOO_LONG:     return "URI Too Long";
         case HTTP_500_INTERNAL_ERROR:   return "Internal Server Error";
@@ -34,6 +35,26 @@ static HttpMethod parse_method(const char* str, size_t len) {
         return HTTP_HEAD;
     }
     return HTTP_UNKNOWN;
+}
+
+/*
+ * Sanitize a header value by removing CR/LF characters to prevent header injection.
+ * Returns sanitized length.
+ */
+static size_t sanitize_header_value(const char* value, char* out, size_t out_size) {
+    if (!value || !out || out_size == 0) return 0;
+    
+    size_t len = 0;
+    for (const char* p = value; *p && len < out_size - 1; p++) {
+        char c = *p;
+        /* Reject CR, LF, and other control characters */
+        if (c == '\r' || c == '\n' || (c < 0x20 && c != '\t')) {
+            continue;  /* Skip dangerous characters */
+        }
+        out[len++] = c;
+    }
+    out[len] = '\0';
+    return len;
 }
 
 /*
@@ -66,14 +87,19 @@ static void extract_header(const char* request, const char* header_name,
         value_end++;
     }
     
-    /* Copy value */
+    /* Copy and sanitize value */
     size_t value_len = value_end - value_start;
     if (value_len >= out_size) {
         value_len = out_size - 1;
     }
     
-    strncpy(out_value, value_start, value_len);
-    out_value[value_len] = '\0';
+    char temp[256];
+    size_t temp_len = value_len < sizeof(temp) ? value_len : sizeof(temp) - 1;
+    strncpy(temp, value_start, temp_len);
+    temp[temp_len] = '\0';
+    
+    /* Sanitize to prevent header injection */
+    sanitize_header_value(temp, out_value, out_size);
 }
 
 /*
@@ -117,6 +143,29 @@ HttpRequest http_parse_request(const char* raw_request, size_t length) {
         uri_end++;
     }
     
+    /* Validate HTTP version (required for security) */
+    const char* version_start = uri_end;
+    while (version_start < line_end && *version_start == ' ') {
+        version_start++;
+    }
+    
+    if (version_start < line_end) {
+        /* Check for HTTP/1.0 or HTTP/1.1 */
+        if (strncmp(version_start, "HTTP/1.", 7) == 0) {
+            char version_char = version_start[7];
+            if (version_char != '0' && version_char != '1') {
+                return req;  /* Invalid HTTP version - reject HTTP/1.2+ and malformed */
+            }
+        } else {
+            /* No valid HTTP version found - could be HTTP/0.9 or malformed */
+            /* For security, require HTTP/1.0 or HTTP/1.1 */
+            return req;
+        }
+    } else {
+        /* No version found - reject HTTP/0.9 */
+        return req;
+    }
+    
     /* Copy URI */
     size_t uri_len = uri_end - uri_start;
     if (uri_len >= sizeof(req.uri)) {
@@ -143,6 +192,7 @@ HttpRequest http_parse_request(const char* raw_request, size_t length) {
 
 /*
  * Send HTTP response headers.
+ * SECURITY: All header values are sanitized to prevent header injection.
  */
 void http_send_headers(SOCKET client, HttpStatus status, const char* content_type,
                        size_t content_length, const char* extra_headers) {
@@ -159,12 +209,17 @@ void http_send_headers(SOCKET client, HttpStatus status, const char* content_typ
                        "Connection: keep-alive\r\n"
                        "Keep-Alive: timeout=60, max=1000\r\n"
                        "X-Frame-Options: DENY\r\n"
-                       "X-Content-Type-Options: nosniff\r\n");
+                       "X-Content-Type-Options: nosniff\r\n"
+                       "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:\r\n"
+                       "Referrer-Policy: strict-origin-when-cross-origin\r\n"
+                       "Permissions-Policy: geolocation=(), microphone=(), camera=()\r\n");
     
-    /* Content-Type */
+    /* Content-Type - sanitize to prevent header injection */
     if (content_type) {
+        char sanitized_ct[256];
+        sanitize_header_value(content_type, sanitized_ct, sizeof(sanitized_ct));
         offset += snprintf(headers + offset, sizeof(headers) - offset,
-                           "Content-Type: %s\r\n", content_type);
+                           "Content-Type: %s\r\n", sanitized_ct);
     }
     
     /* Content-Length */
@@ -173,10 +228,12 @@ void http_send_headers(SOCKET client, HttpStatus status, const char* content_typ
                            "Content-Length: %zu\r\n", content_length);
     }
     
-    /* Extra headers */
+    /* Extra headers - sanitize to prevent header injection */
     if (extra_headers && *extra_headers) {
+        char sanitized_extra[512];
+        sanitize_header_value(extra_headers, sanitized_extra, sizeof(sanitized_extra));
         offset += snprintf(headers + offset, sizeof(headers) - offset,
-                           "%s", extra_headers);
+                           "%s", sanitized_extra);
     }
     
     /* End of headers */
@@ -187,21 +244,21 @@ void http_send_headers(SOCKET client, HttpStatus status, const char* content_typ
 
 /*
  * Send an HTTP error response.
+ * SECURITY: Generic error message to prevent information disclosure.
  */
 void http_send_error(SOCKET client, HttpStatus status) {
     char body[512];
+    /* Generic error message - no version info or internal details */
     snprintf(body, sizeof(body),
              "<!DOCTYPE html>\n"
              "<html>\n"
-             "<head><title>%d %s</title></head>\n"
+             "<head><title>Error %d</title></head>\n"
              "<body>\n"
-             "<h1>%d %s</h1>\n"
-             "<hr>\n"
-             "<p>⚡ Bolt HTTP Server</p>\n"
+             "<h1>Error %d</h1>\n"
+             "<p>The request could not be processed.</p>\n"
              "</body>\n"
              "</html>\n",
-             status, http_status_text(status),
-             status, http_status_text(status));
+             status, status);
     
     http_send_response(client, status, "text/html; charset=utf-8",
                        body, strlen(body));

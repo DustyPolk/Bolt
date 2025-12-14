@@ -335,11 +335,41 @@ void file_server_handle(SOCKET client, const HttpRequest* request) {
  * Bolt async fast-path
  * ========================= */
 
+/*
+ * Sanitize header value to prevent header injection.
+ */
+static size_t sanitize_header_value(const char* value, char* out, size_t out_size) {
+    if (!value || !out || out_size == 0) return 0;
+    
+    size_t len = 0;
+    for (const char* p = value; *p && len < out_size - 1; p++) {
+        char c = *p;
+        /* Reject CR, LF, and other control characters */
+        if (c == '\r' || c == '\n' || (c < 0x20 && c != '\t')) {
+            continue;
+        }
+        out[len++] = c;
+    }
+    out[len] = '\0';
+    return len;
+}
+
 static size_t build_headers_200(char* out, size_t out_sz,
                                 const char* content_type,
                                 size_t content_length,
                                 const char* extra_headers,
                                 bool keep_alive) {
+    /* Sanitize header values to prevent injection */
+    char safe_ct[256] = "application/octet-stream";
+    char safe_extra[512] = "";
+    
+    if (content_type) {
+        sanitize_header_value(content_type, safe_ct, sizeof(safe_ct));
+    }
+    if (extra_headers && *extra_headers) {
+        sanitize_header_value(extra_headers, safe_extra, sizeof(safe_extra));
+    }
+    
     return (size_t)snprintf(out, out_sz,
         "HTTP/1.1 200 OK\r\n"
         "Server: " BOLT_SERVER_NAME "\r\n"
@@ -350,11 +380,14 @@ static size_t build_headers_200(char* out, size_t out_sz,
         "%s"
         "X-Frame-Options: DENY\r\n"
         "X-Content-Type-Options: nosniff\r\n"
+        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:\r\n"
+        "Referrer-Policy: strict-origin-when-cross-origin\r\n"
+        "Permissions-Policy: geolocation=(), microphone=(), camera=()\r\n"
         "\r\n",
         keep_alive ? "keep-alive" : "close",
-        content_type ? content_type : "application/octet-stream",
+        safe_ct,
         content_length,
-        extra_headers ? extra_headers : ""
+        safe_extra
     );
 }
 
@@ -363,6 +396,13 @@ static size_t build_headers_status(char* out, size_t out_sz,
                                    const char* content_type,
                                    size_t content_length,
                                    bool keep_alive) {
+    /* Sanitize header values to prevent injection */
+    char safe_ct[256] = "text/plain; charset=utf-8";
+    
+    if (content_type) {
+        sanitize_header_value(content_type, safe_ct, sizeof(safe_ct));
+    }
+    
     return (size_t)snprintf(out, out_sz,
         "HTTP/1.1 %d %s\r\n"
         "Server: " BOLT_SERVER_NAME "\r\n"
@@ -372,15 +412,18 @@ static size_t build_headers_status(char* out, size_t out_sz,
         "Content-Length: %zu\r\n"
         "X-Frame-Options: DENY\r\n"
         "X-Content-Type-Options: nosniff\r\n"
+        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:\r\n"
+        "Referrer-Policy: strict-origin-when-cross-origin\r\n"
+        "Permissions-Policy: geolocation=(), microphone=(), camera=()\r\n"
         "\r\n",
         status, http_status_text(status),
         keep_alive ? "keep-alive" : "close",
-        content_type ? content_type : "text/plain; charset=utf-8",
+        safe_ct,
         content_length
     );
 }
 
-static void send_error_async(BoltConnection* conn, HttpStatus status) {
+void send_error_async(BoltConnection* conn, HttpStatus status) {
     char body[256];
     int body_len = snprintf(body, sizeof(body),
                             "%d %s\n", status, http_status_text(status));

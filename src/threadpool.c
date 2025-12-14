@@ -2,8 +2,15 @@
 #include "../include/bolt_server.h"
 #include "../include/iocp.h"
 #include "../include/connection.h"
+#include "../include/file_server.h"
+#include "../include/bolt_server.h"  /* For rate limiter functions */
 #include <stdio.h>
 #include <stdlib.h>
+
+/* Forward declarations for rate limiter */
+bool bolt_rate_limiter_check(BoltRateLimiter* limiter, uint32_t ip);
+void bolt_rate_limiter_increment(BoltRateLimiter* limiter, uint32_t ip);
+void bolt_rate_limiter_decrement(BoltRateLimiter* limiter, uint32_t ip);
 
 /* Forward declaration */
 static DWORD WINAPI worker_thread(LPVOID param);
@@ -189,6 +196,38 @@ static DWORD WINAPI worker_thread(LPVOID param) {
                 if (accept_idx >= 0 && accept_idx < iocp->num_accepts) {
                     SOCKET client_socket = iocp->accept_sockets[accept_idx];
                     
+                    /* Extract client IP from AcceptEx buffer */
+                    struct sockaddr_in* local_addr = NULL;
+                    struct sockaddr_in* remote_addr = NULL;
+                    int local_len = 0;
+                    int remote_len = 0;
+                    uint32_t client_ip = 0;
+                    
+                    if (iocp->GetAcceptExSockaddrs) {
+                        iocp->GetAcceptExSockaddrs(
+                            overlapped->buffer,
+                            bytes_transferred,
+                            sizeof(struct sockaddr_in) + 16,
+                            sizeof(struct sockaddr_in) + 16,
+                            (struct sockaddr**)&local_addr, &local_len,
+                            (struct sockaddr**)&remote_addr, &remote_len
+                        );
+                        if (remote_addr) {
+                            client_ip = remote_addr->sin_addr.s_addr;
+                        }
+                    }
+                    
+                    /* Rate limiting: check if IP can make another connection */
+                    if (g_bolt_server->rate_limiter && client_ip != 0) {
+                        if (!bolt_rate_limiter_check(g_bolt_server->rate_limiter, client_ip)) {
+                            /* Rate limit exceeded - reject connection */
+                            closesocket(client_socket);
+                            iocp->accept_sockets[accept_idx] = INVALID_SOCKET;
+                            bolt_iocp_post_accept(iocp, accept_idx);
+                            break;
+                        }
+                    }
+                    
                     /* Inherit socket options from listen socket */
                     setsockopt(client_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
                               (char*)&iocp->listen_socket, sizeof(iocp->listen_socket));
@@ -200,7 +239,15 @@ static DWORD WINAPI worker_thread(LPVOID param) {
                     /* Get connection from pool */
                     BoltConnection* conn = bolt_conn_acquire(g_bolt_server->conn_pool);
                     if (conn) {
+                        /* Store client IP in connection */
+                        conn->client_ip = client_ip;
+                        
                         bolt_conn_init(conn, client_socket, worker->worker_id);
+                        
+                        /* Increment rate limiter counter */
+                        if (g_bolt_server->rate_limiter && client_ip != 0) {
+                            bolt_rate_limiter_increment(g_bolt_server->rate_limiter, client_ip);
+                        }
                         
                         /* Associate with IOCP */
                         bolt_iocp_associate(iocp, client_socket, (void*)conn);
@@ -252,13 +299,28 @@ static DWORD WINAPI worker_thread(LPVOID param) {
                     
                     /* Process received data */
                     if (bolt_conn_process_recv(conn, bytes_transferred)) {
-                        /* Request complete - handle it */
-                        bolt_conn_handle_request(conn);
-                        InterlockedIncrement64(&worker->requests_handled);
-                        InterlockedIncrement64(&pool->total_requests);
+                        /* Request complete or timed out - handle it */
+                        if (conn->request.valid) {
+                            bolt_conn_handle_request(conn);
+                            InterlockedIncrement64(&worker->requests_handled);
+                            InterlockedIncrement64(&pool->total_requests);
+                        } else {
+                            /* Invalid request or timeout - send error and close */
+                            send_error_async(conn, HTTP_408_REQUEST_TIMEOUT);
+                            bolt_conn_close(conn);
+                            bolt_conn_release(g_bolt_server->conn_pool, conn);
+                        }
                     } else {
-                        /* Need more data */
-                        bolt_iocp_post_recv(g_bolt_server->iocp, conn);
+                        /* Need more data - check timeout before posting another recv */
+                        if (bolt_conn_is_timed_out(conn, BOLT_REQUEST_TIMEOUT)) {
+                            /* Request timeout - close connection */
+                            send_error_async(conn, HTTP_408_REQUEST_TIMEOUT);
+                            bolt_conn_close(conn);
+                            bolt_conn_release(g_bolt_server->conn_pool, conn);
+                        } else {
+                            /* Post another recv */
+                            bolt_iocp_post_recv(g_bolt_server->iocp, conn);
+                        }
                     }
                 }
                 break;

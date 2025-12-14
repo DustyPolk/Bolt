@@ -84,6 +84,11 @@ bool bolt_send_response(BoltConnection* conn,
                         const char* body, size_t body_len) {
     if (!conn || !g_bolt_server) return false;
     
+    /* Check for integer overflow before addition */
+    if (header_len > SIZE_MAX - body_len) {
+        return false;
+    }
+    
     /* Calculate total size */
     size_t total_len = header_len + body_len;
     if (total_len > conn->send_buffer_size) {

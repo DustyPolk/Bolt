@@ -8,6 +8,20 @@
 #include "memory_pool.h"
 #include "file_cache.h"
 
+/* Rate limiter entry */
+typedef struct RateLimitEntry {
+    uint32_t ip;
+    volatile LONG connection_count;
+    ULONGLONG last_seen;
+    struct RateLimitEntry* next;  /* For hash table chaining */
+} RateLimitEntry;
+
+/* Rate limiter */
+typedef struct BoltRateLimiter {
+    RateLimitEntry* table[BOLT_RATE_LIMIT_TABLE_SIZE];
+    CRITICAL_SECTION lock;
+} BoltRateLimiter;
+
 /*
  * Main Bolt server structure.
  */
@@ -22,6 +36,7 @@ struct BoltServer {
     BoltConnectionPool* conn_pool;
     BoltMemoryPool* mem_pool;
     BoltFileCache* file_cache;
+    BoltRateLimiter* rate_limiter;
     
     /* State */
     volatile bool running;

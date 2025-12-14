@@ -44,6 +44,9 @@ struct BoltConnection {
     ULONGLONG connect_time;
     ULONGLONG last_activity;
     
+    /* Client IP address (for rate limiting) */
+    uint32_t client_ip;
+    
     /* Pool management */
     int arena_id;
     struct BoltConnection* next_free;  /* For connection pool */

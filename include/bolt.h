@@ -34,11 +34,16 @@
 #define BOLT_BACKLOG            1024
 #define BOLT_MAX_CONNECTIONS    10000
 
+/* Rate Limiting */
+#define BOLT_MAX_CONNECTIONS_PER_IP  10    /* Max concurrent connections per IP */
+#define BOLT_RATE_LIMIT_TABLE_SIZE   1024  /* Hash table size for IP tracking */
+
 /* Timeouts (milliseconds) */
 #define BOLT_ACCEPT_TIMEOUT     0           /* No timeout for accept */
 #define BOLT_RECV_TIMEOUT       30000       /* 30 seconds */
 #define BOLT_SEND_TIMEOUT       30000       /* 30 seconds */
 #define BOLT_KEEPALIVE_TIMEOUT  60000       /* 60 seconds idle */
+#define BOLT_REQUEST_TIMEOUT    5000        /* 5 seconds to receive complete headers (prevents Slowloris) */
 
 /* Buffers */
 #define BOLT_RECV_BUFFER_SIZE   8192        /* 8 KB receive buffer */

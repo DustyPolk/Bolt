@@ -58,6 +58,9 @@ static size_t build_200_headers(char* out, size_t out_sz,
         "Last-Modified: %s\r\n"
         "X-Frame-Options: DENY\r\n"
         "X-Content-Type-Options: nosniff\r\n"
+        "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:\r\n"
+        "Referrer-Policy: strict-origin-when-cross-origin\r\n"
+        "Permissions-Policy: geolocation=(), microphone=(), camera=()\r\n"
         "\r\n",
         content_type ? content_type : "application/octet-stream",
         content_length,
@@ -171,6 +174,27 @@ bool bolt_file_cache_get(BoltFileCache* cache,
     /* Slow path: exclusive lock load/refresh */
     AcquireSRWLockExclusive(&cache->lock);
 
+    /* Re-check: another thread may have loaded it while we waited for exclusive lock */
+    idx = (size_t)(h % cache->capacity);
+    for (size_t probe = 0; probe < cache->capacity; probe++) {
+        CacheEntry* check_e = &cache->entries[idx];
+        if (!check_e->used) break;
+        if (check_e->hash == h && strcmp(check_e->path, filepath) == 0) {
+            if (check_e->mtime == mtime && check_e->file_size == file_size) {
+                /* Another thread loaded it - use it */
+                check_e->last_used = GetTickCount64();
+                out->headers = check_e->headers;
+                out->headers_len = check_e->headers_len;
+                out->body = check_e->body;
+                out->body_len = check_e->body_len;
+                ReleaseSRWLockExclusive(&cache->lock);
+                return true;
+            }
+            break;
+        }
+        idx = (idx + 1) % cache->capacity;
+    }
+
     CacheEntry* e = find_slot(cache, h, filepath);
     if (!e) {
         ReleaseSRWLockExclusive(&cache->lock);
@@ -199,13 +223,22 @@ bool bolt_file_cache_get(BoltFileCache* cache,
         return false;
     }
 
+    /* Check for integer overflow before addition */
+    if (hdr_len > SIZE_MAX - file_size) {
+        ReleaseSRWLockExclusive(&cache->lock);
+        return false;
+    }
     size_t total = hdr_len + file_size;
     if (total > BOLT_FILE_CACHE_MAX_ENTRY_SIZE) {
         ReleaseSRWLockExclusive(&cache->lock);
         return false;
     }
 
-    /* Enforce total cache cap */
+    /* Enforce total cache cap - check for overflow */
+    if (cache->total_bytes > SIZE_MAX - total) {
+        ReleaseSRWLockExclusive(&cache->lock);
+        return false;
+    }
     while (cache->total_bytes + total > cache->max_total_bytes) {
         CacheEntry* victim = find_lru(cache);
         if (!victim || (!victim->used && victim == e)) break;

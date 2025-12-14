@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Forward declaration for rate limiter */
+void bolt_rate_limiter_decrement(BoltRateLimiter* limiter, uint32_t ip);
+
 /* Global server reference */
 BoltServer* g_bolt_server = NULL;
 
@@ -95,6 +98,11 @@ BoltConnection* bolt_conn_acquire(BoltConnectionPool* pool) {
  */
 void bolt_conn_release(BoltConnectionPool* pool, BoltConnection* conn) {
     if (!pool || !conn) return;
+    
+    /* Decrement rate limiter before closing */
+    if (g_bolt_server && g_bolt_server->rate_limiter && conn->client_ip != 0) {
+        bolt_rate_limiter_decrement(g_bolt_server->rate_limiter, conn->client_ip);
+    }
     
     /* Ensure connection is closed */
     bolt_conn_close(conn);
@@ -214,9 +222,17 @@ bool bolt_conn_is_timed_out(BoltConnection* conn, DWORD timeout_ms) {
 
 /*
  * Process received data.
+ * SECURITY: Includes timeout check to prevent Slowloris attacks.
  */
 bool bolt_conn_process_recv(BoltConnection* conn, DWORD bytes_received) {
     if (!conn) return false;
+    
+    /* Check for request timeout (Slowloris protection) */
+    if (bolt_conn_is_timed_out(conn, BOLT_REQUEST_TIMEOUT)) {
+        /* Request taking too long - close connection */
+        conn->request.valid = false;
+        return true;  /* Return true to trigger error handling */
+    }
     
     if (bytes_received > 0) {
         conn->recv_offset += bytes_received;

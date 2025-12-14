@@ -37,5 +37,10 @@ void file_server_serve_directory(SOCKET client, const char* dirpath,
  */
 void bolt_file_server_handle(BoltConnection* conn, const HttpRequest* request);
 
+/*
+ * Send an error response asynchronously.
+ */
+void send_error_async(BoltConnection* conn, HttpStatus status);
+
 #endif /* FILE_SERVER_H */
 
