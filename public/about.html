@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - ⚡ Bolt HTTP Server</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, #0f3460 0%, #16213e 50%, #1a1a2e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #e8e8e8;
+        }
+        
+        .container {
+            text-align: center;
+            padding: 3rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+            max-width: 700px;
+        }
+        
+        .back-link {
+            display: inline-block;
+            margin-bottom: 2rem;
+            color: #00d9ff;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: transform 0.2s;
+        }
+        
+        .back-link:hover {
+            transform: translateX(-5px);
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(90deg, #00ff88, #00d9ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .info-card {
+            background: rgba(255, 255, 255, 0.03);
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin: 1.5rem 0;
+            text-align: left;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .info-card h2 {
+            color: #00d9ff;
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+        }
+        
+        .info-card ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .info-card li {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .info-card li:last-child {
+            border-bottom: none;
+        }
+        
+        .label {
+            color: #888;
+        }
+        
+        .value {
+            color: #00ff88;
+            font-family: 'Consolas', monospace;
+        }
+        
+        .tech-stack {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 2rem;
+        }
+        
+        .tech-badge {
+            background: rgba(0, 217, 255, 0.1);
+            color: #00d9ff;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            border: 1px solid rgba(0, 217, 255, 0.2);
+        }
+        
+        .nav-links {
+            margin-top: 2rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+        
+        .nav-link {
+            color: #00d9ff;
+            text-decoration: none;
+            padding: 0.75rem 1.5rem;
+            border: 1px solid rgba(0, 217, 255, 0.3);
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .nav-link:hover {
+            background: rgba(0, 217, 255, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        footer {
+            margin-top: 2rem;
+            color: #555;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Back to Home</a>
+        
+        <h1>⚡ About Bolt</h1>
+        
+        <div class="info-card">
+            <h2>Server Configuration</h2>
+            <ul>
+                <li>
+                    <span class="label">Port</span>
+                    <span class="value">8080</span>
+                </li>
+                <li>
+                    <span class="label">Web Root</span>
+                    <span class="value">./public/</span>
+                </li>
+                <li>
+                    <span class="label">Max Request Size</span>
+                    <span class="value">8 KB</span>
+                </li>
+                <li>
+                    <span class="label">Keep-Alive Timeout</span>
+                    <span class="value">60 seconds</span>
+                </li>
+                <li>
+                    <span class="label">Max File Size</span>
+                    <span class="value">50 MB</span>
+                </li>
+            </ul>
+        </div>
+        
+        <div class="info-card">
+            <h2>Security Features</h2>
+            <ul>
+                <li>
+                    <span class="label">Path Traversal Protection</span>
+                    <span class="value">Enabled</span>
+                </li>
+                <li>
+                    <span class="label">Request Validation</span>
+                    <span class="value">GET/HEAD only</span>
+                </li>
+                <li>
+                    <span class="label">X-Frame-Options</span>
+                    <span class="value">DENY</span>
+                </li>
+                <li>
+                    <span class="label">X-Content-Type-Options</span>
+                    <span class="value">nosniff</span>
+                </li>
+            </ul>
+        </div>
+        
+        <div class="tech-stack">
+            <span class="tech-badge">Pure C</span>
+            <span class="tech-badge">Windows IOCP</span>
+            <span class="tech-badge">TransmitFile</span>
+            <span class="tech-badge">Thread Pool</span>
+            <span class="tech-badge">Keep-Alive</span>
+        </div>
+        
+        <div class="nav-links">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/about.html" class="nav-link">About</a>
+        </div>
+        
+        <footer>
+            <p>⚡ Bolt HTTP Server v1.0</p>
+        </footer>
+    </div>
+</body>
+</html>
+
