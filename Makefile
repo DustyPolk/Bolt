@@ -226,8 +226,9 @@ LIB_OBJS = $(OBJ_DIR)/bolt_server.o \
 TEST_TARGET = test_runner.exe
 
 # Build and run tests
-test: $(LIB_OBJS) $(TEST_TARGET)
-	./$(TEST_TARGET)
+test: $(LIB_OBJS)
+	$(CC) $(CFLAGS) -I./tests tests/test_main.c tests/test_utils.c tests/test_http.c tests/test_mime.c tests/test_rewrite.c tests/test_config.c tests/test_pool.c tests/test_cache.c tests/test_server.c tests/test_security.c $(LIB_OBJS) -o test_runner.exe $(LDFLAGS)
+	./test_runner.exe
 
 # Build test runner
 $(TEST_TARGET): $(LIB_OBJS) $(TEST_SRCS)

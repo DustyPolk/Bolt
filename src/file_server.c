@@ -254,7 +254,7 @@ void file_server_serve_directory(SOCKET client, const char* dirpath,
                  sys_time.wHour, sys_time.wMinute);
         
         /* Build link */
-        offset += snprintf(html + offset, 64 * 1024 - offset,
+        int written = snprintf(html + offset, 64 * 1024 - offset,
             "    <tr><td class=\"%s\"><a href=\"%s%s%s\">%s%s</a></td>"
             "<td class=\"size\">%s</td><td class=\"date\">%s</td></tr>\n",
             is_dir ? "dir" : "",
@@ -264,8 +264,13 @@ void file_server_serve_directory(SOCKET client, const char* dirpath,
             find_data.cFileName,
             is_dir ? "/" : "",
             size_str, date_str);
+            
+        if (written < 0 || written >= 64 * 1024 - offset) {
+            break; /* Buffer full */
+        }
+        offset += written;
         
-        /* Prevent buffer overflow */
+        /* Prevent buffer overflow (legacy check, kept for safety) */
         if (offset > 60 * 1024) {
             break;
         }

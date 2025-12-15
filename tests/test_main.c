@@ -11,6 +11,13 @@
 
 #include "minunit.h"
 
+/* Define test counters */
+int mu_tests_run = 0;
+int mu_tests_passed = 0;
+int mu_tests_failed = 0;
+int mu_assertions = 0;
+const char* mu_last_error = NULL;
+
 /* External test suite declarations */
 extern void test_suite_utils(void);
 extern void test_suite_http(void);
@@ -20,6 +27,7 @@ extern void test_suite_config(void);
 extern void test_suite_pool(void);
 extern void test_suite_cache(void);
 extern void test_suite_server(void);
+extern void test_suite_security(void);
 
 /*
  * Initialize Winsock for network tests.
@@ -76,6 +84,7 @@ int main(int argc, char* argv[]) {
     MU_RUN_SUITE(test_suite_config);
     MU_RUN_SUITE(test_suite_pool);
     MU_RUN_SUITE(test_suite_cache);
+    MU_RUN_SUITE(test_suite_security);
     
     /* Run integration tests */
     MU_RUN_SUITE(test_suite_server);

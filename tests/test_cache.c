@@ -8,6 +8,24 @@
 #include "../include/file_cache.h"
 #include "../include/bolt.h"
 #include <string.h>
+#include <stdio.h>
+#include <sys/stat.h>
+
+/*============================================================================
+ * Helpers
+ *============================================================================*/
+
+static void create_temp_file(const char* filename, const char* content) {
+    FILE* f = fopen(filename, "wb");
+    if (f) {
+        fwrite(content, 1, strlen(content), f);
+        fclose(f);
+    }
+}
+
+static void delete_temp_file(const char* filename) {
+    remove(filename);
+}
 
 /*============================================================================
  * Cache Creation/Destruction Tests
@@ -34,58 +52,6 @@ MU_TEST(test_cache_destroy_null) {
 }
 
 /*============================================================================
- * Cache Add Tests
- *============================================================================*/
-
-MU_TEST(test_cache_add_entry) {
-    BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
-    mu_assert_not_null(cache);
-    
-    const char* path = "/test/file.txt";
-    const char* content = "Hello, World!";
-    const char* headers = "Content-Type: text/plain\r\n";
-    
-    bool result = bolt_file_cache_add(cache, path, content, strlen(content), 
-                                       headers, strlen(headers));
-    mu_assert_true(result);
-    
-    bolt_file_cache_destroy(cache);
-    return NULL;
-}
-
-MU_TEST(test_cache_add_multiple) {
-    BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
-    mu_assert_not_null(cache);
-    
-    const char* content = "Test content";
-    const char* headers = "Content-Type: text/plain\r\n";
-    
-    mu_assert_true(bolt_file_cache_add(cache, "/file1.txt", content, strlen(content), headers, strlen(headers)));
-    mu_assert_true(bolt_file_cache_add(cache, "/file2.txt", content, strlen(content), headers, strlen(headers)));
-    mu_assert_true(bolt_file_cache_add(cache, "/file3.txt", content, strlen(content), headers, strlen(headers)));
-    
-    bolt_file_cache_destroy(cache);
-    return NULL;
-}
-
-MU_TEST(test_cache_add_null_path) {
-    BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
-    mu_assert_not_null(cache);
-    
-    bool result = bolt_file_cache_add(cache, NULL, "content", 7, "headers", 7);
-    mu_assert_false(result);
-    
-    bolt_file_cache_destroy(cache);
-    return NULL;
-}
-
-MU_TEST(test_cache_add_null_cache) {
-    bool result = bolt_file_cache_add(NULL, "/path", "content", 7, "headers", 7);
-    mu_assert_false(result);
-    return NULL;
-}
-
-/*============================================================================
  * Cache Get Tests
  *============================================================================*/
 
@@ -93,40 +59,58 @@ MU_TEST(test_cache_get_existing) {
     BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
     mu_assert_not_null(cache);
     
-    const char* path = "/test/file.txt";
+    const char* filename = "test_cache_file.txt";
     const char* content = "Hello, World!";
-    const char* headers = "Content-Type: text/plain\r\n";
+    create_temp_file(filename, content);
     
-    bolt_file_cache_add(cache, path, content, strlen(content), headers, strlen(headers));
+    struct stat st;
+    mu_check(stat(filename, &st) == 0);
     
-    /* Get the cached entry */
-    const char* cached_content;
-    size_t cached_size;
-    const char* cached_headers;
-    size_t cached_headers_size;
-    
-    bool found = bolt_file_cache_get(cache, path, &cached_content, &cached_size,
-                                     &cached_headers, &cached_headers_size);
+    BoltCachedResponse out;
+    bool found = bolt_file_cache_get(cache, filename, "text/plain", st.st_mtime, st.st_size, &out);
     
     mu_assert_true(found);
-    mu_assert_size_eq(strlen(content), cached_size);
-    mu_check(memcmp(cached_content, content, cached_size) == 0);
+    mu_assert_size_eq(strlen(content), out.body_len);
+    mu_check(memcmp(out.body, content, out.body_len) == 0);
     
+    delete_temp_file(filename);
+    bolt_file_cache_destroy(cache);
+    return NULL;
+}
+
+MU_TEST(test_cache_get_miss) {
+    /* Test getting a file that exists but is not in cache yet (should load it) */
+    BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
+    
+    const char* filename = "test_cache_miss.txt";
+    const char* content = "Cache Miss Content";
+    create_temp_file(filename, content);
+    
+    struct stat st;
+    stat(filename, &st);
+    
+    BoltCachedResponse out;
+    /* First call loads it */
+    bool found = bolt_file_cache_get(cache, filename, "text/plain", st.st_mtime, st.st_size, &out);
+    mu_assert_true(found);
+    mu_check(memcmp(out.body, content, out.body_len) == 0);
+    
+    /* Second call should hit cache (internal check, hard to verify from outside without mocking) */
+    found = bolt_file_cache_get(cache, filename, "text/plain", st.st_mtime, st.st_size, &out);
+    mu_assert_true(found);
+    
+    delete_temp_file(filename);
     bolt_file_cache_destroy(cache);
     return NULL;
 }
 
 MU_TEST(test_cache_get_nonexistent) {
     BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
-    mu_assert_not_null(cache);
     
-    const char* cached_content;
-    size_t cached_size;
-    const char* cached_headers;
-    size_t cached_headers_size;
-    
-    bool found = bolt_file_cache_get(cache, "/nonexistent.txt", &cached_content, &cached_size,
-                                     &cached_headers, &cached_headers_size);
+    BoltCachedResponse out;
+    /* File doesn't exist, so stat would fail in real usage, 
+       but if we pass dummy values, the cache loader will fail to read file */
+    bool found = bolt_file_cache_get(cache, "nonexistent_file_999.txt", "text/plain", 12345, 100, &out);
     
     mu_assert_false(found);
     
@@ -134,102 +118,56 @@ MU_TEST(test_cache_get_nonexistent) {
     return NULL;
 }
 
-MU_TEST(test_cache_get_null_path) {
+MU_TEST(test_cache_get_null_args) {
     BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
-    mu_assert_not_null(cache);
+    BoltCachedResponse out;
     
-    const char* cached_content;
-    size_t cached_size;
-    const char* cached_headers;
-    size_t cached_headers_size;
+    /* NULL path */
+    mu_assert_false(bolt_file_cache_get(cache, NULL, "type", 0, 0, &out));
     
-    bool found = bolt_file_cache_get(cache, NULL, &cached_content, &cached_size,
-                                     &cached_headers, &cached_headers_size);
+    /* NULL cache */
+    mu_assert_false(bolt_file_cache_get(NULL, "path", "type", 0, 0, &out));
     
-    mu_assert_false(found);
+    /* NULL out */
+    mu_assert_false(bolt_file_cache_get(cache, "path", "type", 0, 0, NULL));
     
     bolt_file_cache_destroy(cache);
     return NULL;
 }
 
 /*============================================================================
- * Cache Remove Tests
+ * Cache Update/Stale Tests
  *============================================================================*/
 
-MU_TEST(test_cache_remove_existing) {
+MU_TEST(test_cache_stale_update) {
     BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
-    mu_assert_not_null(cache);
     
-    const char* path = "/test/file.txt";
-    bolt_file_cache_add(cache, path, "content", 7, "headers", 7);
+    const char* filename = "test_cache_stale.txt";
+    create_temp_file(filename, "Version 1");
     
-    /* Remove and verify it's gone */
-    bolt_file_cache_remove(cache, path);
+    struct stat st;
+    stat(filename, &st);
     
-    const char* cached_content;
-    size_t cached_size;
-    const char* cached_headers;
-    size_t cached_headers_size;
+    BoltCachedResponse out;
+    bolt_file_cache_get(cache, filename, "text/plain", st.st_mtime, st.st_size, &out);
+    mu_check(memcmp(out.body, "Version 1", 9) == 0);
     
-    bool found = bolt_file_cache_get(cache, path, &cached_content, &cached_size,
-                                     &cached_headers, &cached_headers_size);
+    /* Update file */
+    /* Wait a bit to ensure mtime changes if resolution is low, or just rely on size change if possible, 
+       but here we change content. Windows mtime resolution is usually good. */
+    /* Force a small sleep might be needed for low-res filesystems, but let's try just overwriting */
+    /* Alternatively, we can fake the mtime passed to get() to simulate staleness */
     
-    mu_assert_false(found);
+    create_temp_file(filename, "Version 2 - Updated");
+    stat(filename, &st);
     
-    bolt_file_cache_destroy(cache);
-    return NULL;
-}
-
-MU_TEST(test_cache_remove_nonexistent) {
-    BoltFileCache* cache = bolt_file_cache_create(100, 1024 * 1024);
-    mu_assert_not_null(cache);
+    /* Call get with new mtime/size */
+    bool found = bolt_file_cache_get(cache, filename, "text/plain", st.st_mtime, st.st_size, &out);
     
-    /* Should not crash when removing nonexistent entry */
-    bolt_file_cache_remove(cache, "/nonexistent.txt");
+    mu_assert_true(found);
+    mu_check(memcmp(out.body, "Version 2 - Updated", 19) == 0);
     
-    bolt_file_cache_destroy(cache);
-    return NULL;
-}
-
-/*============================================================================
- * Cache Capacity Tests
- *============================================================================*/
-
-MU_TEST(test_cache_entry_limit) {
-    /* Create cache with only 5 entries max */
-    BoltFileCache* cache = bolt_file_cache_create(5, 1024 * 1024);
-    mu_assert_not_null(cache);
-    
-    char path[64];
-    const char* content = "Test content";
-    const char* headers = "Headers\r\n";
-    
-    /* Add more entries than capacity */
-    for (int i = 0; i < 10; i++) {
-        snprintf(path, sizeof(path), "/file%d.txt", i);
-        bolt_file_cache_add(cache, path, content, strlen(content), headers, strlen(headers));
-    }
-    
-    /* Cache should still work (older entries may be evicted) */
-    
-    bolt_file_cache_destroy(cache);
-    return NULL;
-}
-
-MU_TEST(test_cache_size_limit) {
-    /* Create cache with small total size */
-    BoltFileCache* cache = bolt_file_cache_create(100, 100);  /* 100 bytes max */
-    mu_assert_not_null(cache);
-    
-    const char* large_content = "This is a longer piece of content that might exceed cache limits.";
-    const char* headers = "Headers\r\n";
-    
-    /* Try to add content that might exceed limit */
-    bolt_file_cache_add(cache, "/large.txt", large_content, strlen(large_content), 
-                        headers, strlen(headers));
-    
-    /* Cache should handle this gracefully */
-    
+    delete_temp_file(filename);
     bolt_file_cache_destroy(cache);
     return NULL;
 }
@@ -244,23 +182,12 @@ void test_suite_cache(void) {
     MU_RUN_TEST(test_cache_create_small);
     MU_RUN_TEST(test_cache_destroy_null);
     
-    /* Add */
-    MU_RUN_TEST(test_cache_add_entry);
-    MU_RUN_TEST(test_cache_add_multiple);
-    MU_RUN_TEST(test_cache_add_null_path);
-    MU_RUN_TEST(test_cache_add_null_cache);
-    
-    /* Get */
+    /* Get operations */
     MU_RUN_TEST(test_cache_get_existing);
+    MU_RUN_TEST(test_cache_get_miss);
     MU_RUN_TEST(test_cache_get_nonexistent);
-    MU_RUN_TEST(test_cache_get_null_path);
+    MU_RUN_TEST(test_cache_get_null_args);
     
-    /* Remove */
-    MU_RUN_TEST(test_cache_remove_existing);
-    MU_RUN_TEST(test_cache_remove_nonexistent);
-    
-    /* Capacity */
-    MU_RUN_TEST(test_cache_entry_limit);
-    MU_RUN_TEST(test_cache_size_limit);
+    /* Updates */
+    MU_RUN_TEST(test_cache_stale_update);
 }
-

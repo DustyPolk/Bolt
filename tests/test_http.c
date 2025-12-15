@@ -82,7 +82,8 @@ MU_TEST(test_parse_uri_with_query_string) {
     HttpRequest req = http_parse_request(raw, strlen(raw));
     
     mu_assert_true(req.valid);
-    mu_assert_string_eq("/search?q=test&page=1", req.uri);
+    /* Query string is stripped for static file serving */
+    mu_assert_string_eq("/search", req.uri);
     
     return NULL;
 }

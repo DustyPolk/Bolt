@@ -11,11 +11,11 @@
 #include <string.h>
 
 /* Test counters */
-static int mu_tests_run = 0;
-static int mu_tests_passed = 0;
-static int mu_tests_failed = 0;
-static int mu_assertions = 0;
-static const char* mu_last_error = NULL;
+extern int mu_tests_run;
+extern int mu_tests_passed;
+extern int mu_tests_failed;
+extern int mu_assertions;
+extern const char* mu_last_error;
 
 /* Colors for terminal output (Windows compatible) */
 #ifdef _WIN32

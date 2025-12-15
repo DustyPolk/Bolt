@@ -82,8 +82,20 @@ void bolt_pool_destroy(BoltMemoryPool* pool) {
  * Allocate from the pool.
  */
 void* bolt_pool_alloc(BoltMemoryPool* pool, int arena_id, size_t size) {
-    if (!pool || arena_id < 0 || arena_id >= pool->num_arenas) {
-        return malloc(size);  /* Fallback */
+    if (!pool) {
+        return NULL;
+    }
+
+    if (arena_id < 0 || arena_id >= pool->num_arenas) {
+        /* Fallback: allocate standalone block with header so it can be freed */
+        size_t alloc_size = sizeof(BoltMemBlock) + size;
+        BoltMemBlock* block = (BoltMemBlock*)_aligned_malloc(alloc_size, BOLT_CACHE_LINE_SIZE);
+        if (block) {
+            block->size = size;
+            block->next = NULL;
+            return block->data;
+        }
+        return NULL;
     }
     
     BoltArena* arena = &pool->arenas[arena_id];

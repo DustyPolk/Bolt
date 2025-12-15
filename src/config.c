@@ -236,6 +236,10 @@ bool config_validate(const BoltConfig* config) {
         return false;
     }
     
+    if (config->worker_threads < 0) {
+        return false;
+    }
+    
     if (config->max_connections < 1) {
         return false;
     }

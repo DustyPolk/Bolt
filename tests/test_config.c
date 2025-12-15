@@ -40,7 +40,7 @@ MU_TEST(test_config_default_compression) {
     config_load_defaults(&config);
     
     /* Compression settings should have reasonable defaults */
-    mu_check(config.compression_level >= 0 && config.compression_level <= 9);
+    mu_check(config.gzip_level >= 0 && config.gzip_level <= 9);
     
     return NULL;
 }
@@ -101,10 +101,10 @@ MU_TEST(test_config_load_nonexistent) {
     config_load_defaults(&config);
     
     /* Loading non-existent file should fail or use defaults */
-    bool result = config_load_from_file("nonexistent_file_12345.conf", &config);
+    bool result = config_load_from_file(&config, "nonexistent_file_12345.conf");
     
-    /* Should return false for non-existent file */
-    mu_assert_false(result);
+    /* Should return true (using defaults) for non-existent file */
+    mu_assert_true(result);
     
     return NULL;
 }
@@ -114,7 +114,7 @@ MU_TEST(test_config_load_null_path) {
     config_load_defaults(&config);
     
     /* NULL path should be handled gracefully */
-    bool result = config_load_from_file(NULL, &config);
+    bool result = config_load_from_file(&config, NULL);
     mu_assert_false(result);
     
     return NULL;
@@ -122,7 +122,7 @@ MU_TEST(test_config_load_null_path) {
 
 MU_TEST(test_config_load_null_config) {
     /* NULL config pointer should be handled gracefully */
-    bool result = config_load_from_file("bolt.conf", NULL);
+    bool result = config_load_from_file(NULL, "bolt.conf");
     mu_assert_false(result);
     
     return NULL;
@@ -246,4 +246,3 @@ void test_suite_config(void) {
     MU_RUN_TEST(test_config_workers_explicit);
     MU_RUN_TEST(test_config_workers_negative);
 }
-

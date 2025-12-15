@@ -152,6 +152,11 @@ bool utils_sanitize_path_with_root(const char* uri, const char* web_root, char* 
     strncpy(decoded, uri, sizeof(decoded) - 1);
     decoded[sizeof(decoded) - 1] = '\0';
     
+    /* Check for null byte injection in source URI */
+    if (strstr(decoded, "%00") != NULL) {
+        return false;
+    }
+    
     /* URL decode FIRST */
     utils_url_decode(decoded);
     
@@ -173,6 +178,34 @@ bool utils_sanitize_path_with_root(const char* uri, const char* web_root, char* 
     /* Check for Windows path traversal patterns */
     if (strstr(decoded, "\\..") != NULL || strstr(decoded, "..\\") != NULL) {
         return false;
+    }
+
+    /* Check for Windows reserved device names */
+    static const char* const reserved_names[] = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        NULL
+    };
+
+    /* Check each path component against reserved names */
+    char temp_path[BOLT_MAX_PATH_LENGTH];
+    strncpy(temp_path, decoded, sizeof(temp_path) - 1);
+    temp_path[sizeof(temp_path) - 1] = '\0';
+    
+    char* token = strtok(temp_path, "/\\");
+    while (token) {
+        /* Check exact match or match with extension */
+        for (const char* const* name = reserved_names; *name; name++) {
+            size_t len = strlen(*name);
+            if (_strnicmp(token, *name, len) == 0) {
+                /* Match if it's the whole string or followed by a dot */
+                if (token[len] == '\0' || token[len] == '.') {
+                    return false;
+                }
+            }
+        }
+        token = strtok(NULL, "/\\");
     }
     
     /* Validate characters - only allow safe characters */

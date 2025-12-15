@@ -19,7 +19,7 @@ MU_TEST(test_match_exact) {
 }
 
 MU_TEST(test_match_wildcard_end) {
-    /* /api/* should match anything starting with /api/ */
+    /* Pattern "/api/*" should match anything starting with /api/ */
     mu_assert_true(rewrite_match_pattern("/api/*", "/api/users"));
     mu_assert_true(rewrite_match_pattern("/api/*", "/api/users/123"));
     mu_assert_true(rewrite_match_pattern("/api/*", "/api/"));
@@ -28,7 +28,7 @@ MU_TEST(test_match_wildcard_end) {
 }
 
 MU_TEST(test_match_wildcard_middle) {
-    /* /user/*/profile should match user profiles */
+    /* Pattern "/user/ * /profile" should match user profiles */
     mu_assert_true(rewrite_match_pattern("/user/*/profile", "/user/123/profile"));
     mu_assert_true(rewrite_match_pattern("/user/*/profile", "/user/john/profile"));
     mu_assert_false(rewrite_match_pattern("/user/*/profile", "/user/123/settings"));
@@ -36,7 +36,7 @@ MU_TEST(test_match_wildcard_middle) {
 }
 
 MU_TEST(test_match_wildcard_start) {
-    /* *.html should match HTML files */
+    /* Pattern "*.html" should match HTML files */
     mu_assert_true(rewrite_match_pattern("*.html", "index.html"));
     mu_assert_true(rewrite_match_pattern("*.html", "about.html"));
     mu_assert_false(rewrite_match_pattern("*.html", "style.css"));
@@ -44,14 +44,14 @@ MU_TEST(test_match_wildcard_start) {
 }
 
 MU_TEST(test_match_multiple_wildcards) {
-    /* /*/files/* should match nested paths */
+    /* Pattern "/ * /files/ *" should match nested paths */
     mu_assert_true(rewrite_match_pattern("/*/files/*", "/user/files/doc.pdf"));
     mu_assert_true(rewrite_match_pattern("/*/files/*", "/admin/files/report.csv"));
     return NULL;
 }
 
 MU_TEST(test_match_question_mark) {
-    /* ? matches single character */
+    /* Pattern "?" matches single character */
     mu_assert_true(rewrite_match_pattern("/file?.txt", "/file1.txt"));
     mu_assert_true(rewrite_match_pattern("/file?.txt", "/filea.txt"));
     mu_assert_false(rewrite_match_pattern("/file?.txt", "/file12.txt"));
@@ -180,7 +180,7 @@ MU_TEST(test_rewrite_empty_uri) {
     rewrite_add_rule(engine, "", "/default", REWRITE_INTERNAL);
     
     char out_uri[2048];
-    bool rewritten = rewrite_apply(engine, "", out_uri, sizeof(out_uri));
+    rewrite_apply(engine, "", out_uri, sizeof(out_uri));
     
     /* Empty URI handling depends on implementation */
     
@@ -235,4 +235,3 @@ void test_suite_rewrite(void) {
     MU_RUN_TEST(test_rewrite_empty_uri);
     MU_RUN_TEST(test_rewrite_very_long_uri);
 }
-

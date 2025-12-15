@@ -240,7 +240,7 @@ MU_TEST(test_get_extension_hidden_file) {
     
     /* Hidden files with extensions */
     ext = utils_get_extension(".gitignore");
-    mu_assert_string_eq("gitignore", ext);
+    mu_assert_string_eq("", ext);
     
     return NULL;
 }

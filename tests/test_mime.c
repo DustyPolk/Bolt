@@ -13,38 +13,38 @@
  *============================================================================*/
 
 MU_TEST(test_mime_html) {
-    const char* mime = mime_type_from_extension("html");
-    mu_assert_string_eq("text/html; charset=utf-8", mime);
+    const char* mime = mime_get_type("html");
+    mu_assert_string_eq("text/html", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_htm) {
-    const char* mime = mime_type_from_extension("htm");
-    mu_assert_string_eq("text/html; charset=utf-8", mime);
+    const char* mime = mime_get_type("htm");
+    mu_assert_string_eq("text/html", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_css) {
-    const char* mime = mime_type_from_extension("css");
-    mu_assert_string_eq("text/css; charset=utf-8", mime);
+    const char* mime = mime_get_type("css");
+    mu_assert_string_eq("text/css", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_js) {
-    const char* mime = mime_type_from_extension("js");
-    mu_assert_string_eq("application/javascript; charset=utf-8", mime);
+    const char* mime = mime_get_type("js");
+    mu_assert_string_eq("text/javascript", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_json) {
-    const char* mime = mime_type_from_extension("json");
-    mu_assert_string_eq("application/json; charset=utf-8", mime);
+    const char* mime = mime_get_type("json");
+    mu_assert_string_eq("application/json", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_txt) {
-    const char* mime = mime_type_from_extension("txt");
-    mu_assert_string_eq("text/plain; charset=utf-8", mime);
+    const char* mime = mime_get_type("txt");
+    mu_assert_string_eq("text/plain", mime);
     return NULL;
 }
 
@@ -53,43 +53,43 @@ MU_TEST(test_mime_txt) {
  *============================================================================*/
 
 MU_TEST(test_mime_png) {
-    const char* mime = mime_type_from_extension("png");
+    const char* mime = mime_get_type("png");
     mu_assert_string_eq("image/png", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_jpg) {
-    const char* mime = mime_type_from_extension("jpg");
+    const char* mime = mime_get_type("jpg");
     mu_assert_string_eq("image/jpeg", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_jpeg) {
-    const char* mime = mime_type_from_extension("jpeg");
+    const char* mime = mime_get_type("jpeg");
     mu_assert_string_eq("image/jpeg", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_gif) {
-    const char* mime = mime_type_from_extension("gif");
+    const char* mime = mime_get_type("gif");
     mu_assert_string_eq("image/gif", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_svg) {
-    const char* mime = mime_type_from_extension("svg");
+    const char* mime = mime_get_type("svg");
     mu_assert_string_eq("image/svg+xml", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_ico) {
-    const char* mime = mime_type_from_extension("ico");
+    const char* mime = mime_get_type("ico");
     mu_assert_string_eq("image/x-icon", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_webp) {
-    const char* mime = mime_type_from_extension("webp");
+    const char* mime = mime_get_type("webp");
     mu_assert_string_eq("image/webp", mime);
     return NULL;
 }
@@ -99,19 +99,19 @@ MU_TEST(test_mime_webp) {
  *============================================================================*/
 
 MU_TEST(test_mime_woff) {
-    const char* mime = mime_type_from_extension("woff");
+    const char* mime = mime_get_type("woff");
     mu_assert_string_eq("font/woff", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_woff2) {
-    const char* mime = mime_type_from_extension("woff2");
+    const char* mime = mime_get_type("woff2");
     mu_assert_string_eq("font/woff2", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_ttf) {
-    const char* mime = mime_type_from_extension("ttf");
+    const char* mime = mime_get_type("ttf");
     mu_assert_string_eq("font/ttf", mime);
     return NULL;
 }
@@ -121,19 +121,19 @@ MU_TEST(test_mime_ttf) {
  *============================================================================*/
 
 MU_TEST(test_mime_pdf) {
-    const char* mime = mime_type_from_extension("pdf");
+    const char* mime = mime_get_type("pdf");
     mu_assert_string_eq("application/pdf", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_zip) {
-    const char* mime = mime_type_from_extension("zip");
+    const char* mime = mime_get_type("zip");
     mu_assert_string_eq("application/zip", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_xml) {
-    const char* mime = mime_type_from_extension("xml");
+    const char* mime = mime_get_type("xml");
     mu_assert_string_eq("application/xml", mime);
     return NULL;
 }
@@ -143,19 +143,19 @@ MU_TEST(test_mime_xml) {
  *============================================================================*/
 
 MU_TEST(test_mime_unknown_extension) {
-    const char* mime = mime_type_from_extension("xyz123");
+    const char* mime = mime_get_type("xyz123");
     mu_assert_string_eq("application/octet-stream", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_empty_extension) {
-    const char* mime = mime_type_from_extension("");
+    const char* mime = mime_get_type("");
     mu_assert_string_eq("application/octet-stream", mime);
     return NULL;
 }
 
 MU_TEST(test_mime_null_extension) {
-    const char* mime = mime_type_from_extension(NULL);
+    const char* mime = mime_get_type(NULL);
     mu_assert_string_eq("application/octet-stream", mime);
     return NULL;
 }
@@ -165,14 +165,14 @@ MU_TEST(test_mime_null_extension) {
  *============================================================================*/
 
 MU_TEST(test_mime_uppercase_html) {
-    const char* mime = mime_type_from_extension("HTML");
+    const char* mime = mime_get_type("HTML");
     /* Should handle uppercase extensions */
     mu_check(strstr(mime, "text/html") != NULL || strcmp(mime, "application/octet-stream") == 0);
     return NULL;
 }
 
 MU_TEST(test_mime_mixed_case) {
-    const char* mime = mime_type_from_extension("HtMl");
+    const char* mime = mime_get_type("HtMl");
     /* Should handle mixed case */
     mu_check(strstr(mime, "text/html") != NULL || strcmp(mime, "application/octet-stream") == 0);
     return NULL;
@@ -219,4 +219,3 @@ void test_suite_mime(void) {
     MU_RUN_TEST(test_mime_uppercase_html);
     MU_RUN_TEST(test_mime_mixed_case);
 }
-

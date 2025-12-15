@@ -145,14 +145,20 @@ HttpRequest http_parse_request(const char* raw_request, size_t length) {
     /* Skip space */
     const char* uri_start = method_end + 1;
     
-    /* Find URI end */
-    const char* uri_end = uri_start;
-    while (uri_end < line_end && *uri_end != ' ' && *uri_end != '?') {
-        uri_end++;
+    /* Find full URI end (space) */
+    const char* full_uri_end = uri_start;
+    while (full_uri_end < line_end && *full_uri_end != ' ') {
+        full_uri_end++;
+    }
+    
+    /* Find path end (stop at ? or space) */
+    const char* path_end = uri_start;
+    while (path_end < full_uri_end && *path_end != '?') {
+        path_end++;
     }
     
     /* Validate HTTP version (required for security) */
-    const char* version_start = uri_end;
+    const char* version_start = full_uri_end;
     while (version_start < line_end && *version_start == ' ') {
         version_start++;
     }
@@ -174,8 +180,8 @@ HttpRequest http_parse_request(const char* raw_request, size_t length) {
         return req;
     }
     
-    /* Copy URI */
-    size_t uri_len = uri_end - uri_start;
+    /* Copy URI (path only, stripped of query string) */
+    size_t uri_len = path_end - uri_start;
     if (uri_len >= sizeof(req.uri)) {
         uri_len = sizeof(req.uri) - 1;
     }
